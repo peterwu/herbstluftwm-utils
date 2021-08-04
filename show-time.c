@@ -29,8 +29,8 @@ create_window() {
     const struct tm *tm;
     time_t t;
     char *markup;
-    char buffer[64];
-    const int buffer_size = sizeof(buffer) / sizeof(buffer[0]);
+    const int buffer_size = 64;
+    char buffer[buffer_size];
 
     // main window
     window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
