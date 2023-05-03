@@ -1,0 +1,385 @@
+#!/usr/bin/env bash
+
+LOGO=""
+SEPARATOR=" "
+COLS=$(tput cols)
+MONITOR="${1:-0}"
+
+# helpers
+uniq_linebuffered() {
+    awk '$0 != l {print; l=$0; fflush();}' "$@"
+}
+
+printl() {
+    tput cup 0 0
+    echo -n "$1"
+}
+
+printc() {
+    local len=${#1}
+    local pos=$(( ($COLS - $len) / 2 ))
+
+    tput cup 0 $pos
+    echo -n "$1"
+}
+
+printr() {
+    local str=$(sed -e 's|[[:cntrl:]]\[[[:digit:]]\+m||g' <<< "${1}")
+    local len=${#str}
+    local spacer="  " #2 spaces
+    local pos=$(( $COLS - $len - ${#spacer} ))
+
+    tput cup 0 $pos
+    echo -n "${spacer}$1"
+
+    tput el
+}
+
+# printers
+print_date() {
+    date +$'date\t%a %d %b %H:%M'
+}
+
+print_ime() {
+    local ime=$(ibus engine 2> /dev/null)
+
+    echo -e "ime\t$ime"
+}
+
+print_vol() {
+    # format: vol/muted?/vol
+
+    vol_info=$(wpctl get-volume @DEFAULT_SINK@)
+    vol=$(bc <<< "$(cut -d' ' -f2 <<< ${vol_info}) * 100" | cut -d. -f1)
+    muted=$(cut -d' ' -f3 <<< $vol_info)
+    if [[ $muted == "[MUTED]" ]]; then
+        muted=true
+    else
+        muted=false
+    fi
+
+    echo -e "vol\t${muted}\t${vol}"
+}
+
+print_net() {
+    # format: net/eth?/strength
+
+    local default_dev=$(ip route show|grep ^default|cut -d ' ' -f 5)
+    local eth=0
+    local strength=0
+
+    case ${default_dev} in
+        "enp0s31f6") # wired
+            eth=1
+            ;;
+        "wla0") # wireless
+            eth=0
+            strength=$(awk 'NR==3 {printf "%d",$3}' /proc/net/wireless)
+            ;;
+        "") # disconnected
+            eth=-1
+            ;;
+    esac
+
+    echo -e "net\t${eth}\t${strength}"
+}
+
+print_batt() {
+    local POWER_SUPPLY_PATH="/sys/class/power_supply"
+
+    local ac_path=''
+    local battery_paths=()
+    local ps_type
+    local ac_online=0
+
+    for ps_path in $POWER_SUPPLY_PATH/*; do
+        ps_type=$(cat "$ps_path/type")
+        case $ps_type in
+            'Mains')
+                ac_path=$ps_path
+                ;;
+            'Battery')
+                battery_paths+=($ps_path)
+                ;;
+        esac
+    done
+
+
+    if [ -f "${ac_path}/online" ]; then
+        ac_online=$(cat "${ac_path}/online")
+    fi
+
+    local battery_level=0
+    local battery_max=0
+    for battery_path in "${battery_paths[@]}"; do
+        battery_level=$(($battery_level + $(cat "${battery_path}/energy_now")))
+        battery_max=$(($battery_max + $(cat "${battery_path}/energy_full")))
+    done
+
+    local battery_percentage=$((${battery_level} * 100 / ${battery_max}))
+
+    echo -e "batt\t${ac_online}\t${battery_percentage}"
+}
+
+# formatters
+format_logo() {
+    # # OSC 8 ; params ; URI ST <name> OSC 8 ;; ST
+    # escape_mask = '\033]8;{};{}\033\\{}\033]8;;\033\\'
+
+    LOGO=$(echo -e "\033]8;;tbp://herbstluftwm/bye\033\\${LOGO}\033]8;;\033\\")
+    LOGO="$(tput setaf 4)${LOGO}$(tput sgr0)"
+}
+
+format_focused_tag() {
+    echo -n "$(tput smul)$(tput setaf 2)$1$(tput sgr0)"
+}
+
+format_unfocused_tag() {
+    echo -n "$(tput dim)$(tput setaf 5)$1$(tput sgr0)"
+}
+
+format_occupied_tag() {
+    echo -n "$(tput setaf 3)$1$(tput sgr0)"
+}
+
+format_unoccupied_tag() {
+    echo -n "$(tput dim)$(tput setaf 7)$1$(tput sgr0)"
+}
+
+format_urgent_tag() {
+    echo -n "$(tput bold)$(tput setaf 1)$1$(tput sgr0)"
+}
+
+format_tags() {
+    local tags=("$@")
+    local ws
+
+    for i in "${tags[@]}"; do
+        tag_name="${i:1}"
+        tag_status="${i:0:1}"
+
+        # format tag_name to support tbp:: protocol
+        tag_name="\033]8;;tbp://herbstluftwm/tag/${tag_name}\033\\\\${tag_name}\033]8;;\033\\"
+
+        case ${tag_status} in
+            ".") # unoccupied
+                ws+=$(format_unoccupied_tag "${tag_name}")
+                ;;
+            ":") # occupied
+                ws+=$(format_occupied_tag "${tag_name}")
+                ;;
+            "+") # unfocused on specified monitor
+                ws+=$(format_unfocused_tag "${tag_name}")
+                ;;
+            "#") # focused on specified monitor
+                ws+=$(format_focused_tag "${tag_name}")
+                ;;
+            "-") # unfocused on different monitor
+                ws+=$(format_unfocused_tag "${tag_name}")
+                ;;
+            "%") # focused on different monitor
+                ws+=$(format_focused_tag "${tag_name}")
+                ;;
+            "!") # urgent!
+                ws+=$(format_urgent_tag "${tag_name}")
+                ;;
+        esac
+
+        ws+="${SEPARATOR}"
+    done
+
+    echo -e "${ws}"
+}
+
+format_date() {
+    local now="$@"
+
+    echo -n "${now}"
+}
+
+format_ime() {
+    local ime=""
+
+    [[ $1 == "xkb:us::eng" ]] && ime="[en]"
+    [[ $1 == "libpinyin" ]] && ime="[zh]"
+
+    echo -n "${ime}"
+}
+
+format_vol() {
+    local muted=$1
+    local vol=$2
+    local icon
+
+    if [[ "${muted}" == true ]]; then
+        icon=""
+    else
+        icon=""
+    fi
+
+    echo -n "${icon}"
+}
+
+format_net() {
+    #  lan
+    #  wifi
+    #  disconnected
+
+    local eth=$1
+    local strength=$((${2:-0} * 100 / 70))
+    local icon
+
+    if [ "${eth}" -eq -1 ]; then
+        # disconnected
+        icon=""
+    elif [ "${eth}" -eq 1 ]; then
+        # wired
+        icon=""
+    else
+        # wirless
+        icon=""
+    fi
+
+    echo -n "${icon}"
+}
+
+format_batt() {
+    local ac=$1
+    local battery_percent=$2
+    local icon, batt
+
+    if [[ "${ac}" -eq 1 ]]; then
+        icon=""
+    else
+        if [ "${battery_percent}" -ge 95 ]; then
+            icon+="" # full
+        elif [ "${battery_percent}" -ge 75 ]; then
+            icon+="" # 3/4
+        elif [ "${battery_percent}" -ge 50 ]; then
+            icon+="" # 1/2
+        elif [ "${battery_percent}" -ge 25 ]; then
+            icon+="" # 1/4
+        else
+            icon+="" # empty
+        fi
+    fi
+
+    batt="${icon} ${battery_percent}%"
+
+    if [[ "${ac}" -eq 0 && "${battery_percent}" -le 9 ]]; then
+        batt="$(tput setaf 1)${batt}"
+    fi
+
+    echo -n "${batt}"
+}
+
+# hide the cursor
+tput civis
+
+# format the logo
+format_logo
+
+# the fun begins
+{
+    # volume
+    print_vol
+
+    # ime
+    print_ime
+
+    # time
+    print_date
+    while :; do
+        print_date
+        sleep 1 || break
+    done > >(uniq_linebuffered) &
+    pids[0]=$!
+
+    # battery info
+    while :; do
+        print_batt
+        sleep 17 || break
+    done > >(uniq_linebuffered) &
+    pids[1]=$!
+
+    udevadm monitor --udev --subsystem-match power_supply |
+        while read event; do
+            print_batt
+        done > >(uniq_linebuffered) &
+    pids[2]=$!
+
+    # net
+    while :; do
+        print_net
+        sleep 11 || break
+    done > >(uniq_linebuffered) &
+    pids[3]=$!
+
+    # ime
+    dbus-monitor --address `ibus address` \
+                 --profile "type='signal',member='GlobalEngineChanged'" |
+        while read event; do
+            print_ime
+        done > >(uniq_linebuffered) &
+    pids[4]=$!
+
+    # initialize tags
+    echo -n "tags init"
+
+    # wait for events
+    herbstclient --idle
+
+    # clean up
+    for pid in "${pids[@]}"; do
+        kill -9 $pid
+    done
+} 2> /dev/null | {
+    while :; do
+        IFS=$'\t' read -ra cmd || break
+        case "${cmd[0]}" in
+            tag*)
+                IFS=$'\t' \
+                    read -ra tags <<< $(herbstclient tag_status "${MONITOR}")
+                ws=$(format_tags "${tags[@]}")
+                ;;
+            date)
+                date=$(format_date "${cmd[@]:1}")
+                ;;
+            vol)
+                vol=$(format_vol "${cmd[@]:1}")
+                ;;
+            net)
+                net=$(format_net "${cmd[@]:1}")
+                ;;
+            batt)
+                batt=$(format_batt "${cmd[@]:1}")
+                ;;
+            ime)
+                ime=$(format_ime "${cmd[@]:1}")
+                ;;
+            reload)
+                exit
+                ;;
+            quit_panel)
+                exit
+                ;;
+            *)
+                continue
+                ;;
+        esac
+
+        # print the final result
+        LEFT="${LOGO}${SEPARATOR}${SEPARATOR}${ws}"
+        CENTER="${date}"
+        RIGHT="${ime}"
+        RIGHT+="${SEPARATOR}${vol}${SEPARATOR}"
+        RIGHT+="${SEPARATOR}${net}${SEPARATOR}"
+        RIGHT+="${SEPARATOR}${batt}"
+
+        echo -n $(tput sgr0)
+        printl "${LEFT}"
+        printc "${CENTER}"
+        printr "${RIGHT}"
+        echo -n $(tput sgr0)
+    done
+} 2> /dev/null
