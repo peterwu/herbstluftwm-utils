@@ -1,7 +1,7 @@
 #include "util.h"
-#include <libnotify/notify.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <systemd/sd-bus.h>
 
 /*
  * ensure to add user to the video group
@@ -50,7 +50,7 @@ int set_brightness(int brightness) {
     return 0;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char *argv[]) {
     int brightness;
     int delta;
     const int max_brightness = get_max_brightness();
@@ -74,17 +74,47 @@ int main(int argc, char **argv) {
 
     snprintf(summary, buffer_size, "Brightness: %d%%", brightness_in_percentage);
 
-    notify_init(app_name);
-    NotifyNotification *nn = notify_notification_new(summary, NULL, "dialog-information");
+    sd_bus_error error = SD_BUS_ERROR_NULL;
+    sd_bus *bus = NULL;
+    int r;
 
-    notify_notification_set_timeout(nn, 1500);
-    notify_notification_set_urgency(nn, NOTIFY_URGENCY_LOW);
-    notify_notification_set_hint(nn, "value", g_variant_new_int32(brightness_in_percentage));
-    notify_notification_set_hint(nn, "x-dunst-stack-tag", g_variant_new_string(app_name));
+    enum { LOW,
+           NORMAL,
+           CRITICAL };
 
-    notify_notification_show(nn, NULL);
-    g_object_unref(G_OBJECT(nn));
-    notify_uninit();
+    r = sd_bus_open_user(&bus);
+    if (r < 0) {
+        fprintf(stderr, "Failed to connect to system bus: %s\n", strerror(-r));
+        goto finish;
+    }
 
-    return 0;
+    r = sd_bus_call_method(bus,
+                           "org.freedesktop.Notifications",
+                           "/org/freedesktop/Notifications",
+                           "org.freedesktop.Notifications",
+                           "Notify",
+                           &error,
+                           NULL,
+                           "susssasa{sv}i",
+                           app_name,
+                           0,
+                           "dialog-information",
+                           summary,
+                           NULL,
+                           0,
+                           3,
+                           "urgency", "y", LOW,
+                           "value", "i", brightness_in_percentage,
+                           "x-dunst-stack-tag", "s", app_name,
+                           1500);
+    if (r < 0) {
+        fprintf(stderr, "Failed to issue method call: %s\n", error.message);
+        goto finish;
+    }
+
+finish:
+    sd_bus_error_free(&error);
+    sd_bus_unref(bus);
+
+    return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
 }
