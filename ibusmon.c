@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define RESULT_FMT "IME\t%s"
+#define RESULT_FMT "ime\t%s"
 
 static void print_global_engine(IBusBus *bus){
     IBusEngineDesc *global_engine = ibus_bus_get_global_engine(bus);

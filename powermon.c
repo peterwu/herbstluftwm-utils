@@ -5,11 +5,14 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <systemd/sd-bus.h>
+#include <unistd.h>
 
 #define POWER_SUPPLY_PATH "/sys/class/power_supply"
 
 /* PWR ac_online batt_perc */
-#define RESULT_FMT "PWR\t%d\t%d"
+#define RESULT_FMT "pwr\t%d\t%d"
+/* in seconds */
+#define PRINT_INTERVAL 10
 
 #define BATTERY_THRESHOLD_LOW 10
 #define BATTERY_THRESHOLD_CRITICAL_LOW 5
@@ -158,7 +161,7 @@ static const sd_bus_vtable poweron_vtable[] = {
         SD_BUS_METHOD("Print", NULL, NULL, method_print, SD_BUS_VTABLE_UNPRIVILEGED),
         SD_BUS_VTABLE_END};
 
-int main(int argc, char *argv[]) {
+static int run_sd_bus_loop() {
     sd_bus_slot *slot = NULL;
     sd_bus *bus = NULL;
     int r;
@@ -205,9 +208,20 @@ int main(int argc, char *argv[]) {
         }
     }
 
-finish:
+    finish:
     sd_bus_slot_unref(slot);
     sd_bus_unref(bus);
 
     return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
+}
+
+int main(int argc, char *argv[]) {
+    if (fork() == 0) {
+        for (;;) {
+           print_power_supply();
+           sleep(PRINT_INTERVAL);
+        }
+    } else {
+        return run_sd_bus_loop();
+    }
 }
