@@ -1,15 +1,13 @@
 #include "util.h"
-#include <dirent.h>
+#include <libudev.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <systemd/sd-bus.h>
 #include <unistd.h>
 
-#define POWER_SUPPLY_PATH "/sys/class/power_supply"
-
-/* PWR ac_online batt_perc */
+/* pwr ac_online batt_perc */
 #define RESULT_FMT "pwr\t%d\t%d"
 /* in seconds */
 #define PRINT_INTERVAL 10
@@ -23,63 +21,68 @@ static uint32_t id_low;
 static uint32_t id_critical_low;
 
 static void read_power_supply(char *result) {
-    DIR *dir;
-    struct stat fstat;
-    struct dirent *subdir;
-    char pathname[_POSIX_PATH_MAX + 1];
-    char filename[_POSIX_PATH_MAX + 1];
-
     int ac_online = 0;
     int battery_now = 0;
     int battery_max = 0;
 
-    dir = opendir(POWER_SUPPLY_PATH);
-    while ((subdir = readdir(dir)) != NULL) {
-        snprintf(pathname,
-                 _POSIX_PATH_MAX, POWER_SUPPLY_PATH "/%s",
-                 subdir->d_name);
+    struct udev *udev;
+    struct udev_device *dev;
+    struct udev_enumerate *enumerate;
+    struct udev_list_entry *devices, *dev_list_entry;
 
-        /* Ignore special directories. */
-        if ((strcmp(subdir->d_name, ".") == 0) ||
-            (strcmp(subdir->d_name, "..") == 0))
-            continue;
+    /* create udev object */
+    udev = udev_new();
+    if (!udev) {
+        fprintf(stderr, "Cannot create udev context.\n");
+        return;
+    }
 
-        /* Print only if it is really directory. */
-        if (stat(pathname, &fstat) < 0) continue;
+    /* create enumerate object */
+    enumerate = udev_enumerate_new(udev);
+    if (!enumerate) {
+        fprintf(stderr, "Cannot create enumerate context.\n");
+        return;
+    }
 
-        /* look for type = [Mains, Battery] */
-        strncpy(filename, pathname, _POSIX_PATH_MAX);
-        strncat(filename, "/type", _POSIX_PATH_MAX);
+    udev_enumerate_add_match_subsystem(enumerate, "power_supply");
+    udev_enumerate_scan_devices(enumerate);
 
-        char type[16];
-        pscanf(filename, "%s", type);
+    /* fillup device list */
+    devices = udev_enumerate_get_list_entry(enumerate);
+    if (!devices) {
+        fprintf(stderr, "Failed to get device list.\n");
+        return;
+    }
+
+    udev_list_entry_foreach(dev_list_entry, devices) {
+        const char *path, *type;
+
+        path = udev_list_entry_get_name(dev_list_entry);
+        dev = udev_device_new_from_syspath(udev, path);
+
+        type = udev_device_get_sysattr_value(dev, "type");
 
         if (!strcmp(type, "Mains")) {
-            strncpy(filename, pathname, _POSIX_PATH_MAX);
-            strncat(filename, "/online", _POSIX_PATH_MAX);
-
-            pscanf(filename, "%d", &ac_online);
+            ac_online = atoi(udev_device_get_sysattr_value(dev, "online"));
         } else if (!strcmp(type, "Battery")) {
             int now, max;
 
-            strncpy(filename, pathname, _POSIX_PATH_MAX);
-            strncat(filename, "/energy_now", _POSIX_PATH_MAX);
-            pscanf(filename, "%ld", &now);
+            now = atoi(udev_device_get_sysattr_value(dev, "energy_now"));
             battery_now += now;
 
-            strncpy(filename, pathname, _POSIX_PATH_MAX);
-            strncat(filename, "/energy_full", _POSIX_PATH_MAX);
-            pscanf(filename, "%ld", &max);
+            max = atoi(udev_device_get_sysattr_value(dev, "energy_full"));
             battery_max += max;
         }
     }
+
+    udev_device_unref(dev);
+    udev_enumerate_unref(enumerate);
+    udev_unref(udev);
 
     battery_now /= 1000;
     battery_max /= 1000;
 
     sprintf(result, RESULT_FMT, ac_online, battery_now * 100 / battery_max);
-
-    closedir(dir);
 }
 
 static void send_notification(const char *result) {
@@ -208,20 +211,82 @@ static int run_sd_bus_loop() {
         }
     }
 
-    finish:
+finish:
     sd_bus_slot_unref(slot);
     sd_bus_unref(bus);
 
     return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
-int main(int argc, char *argv[]) {
-    if (fork() == 0) {
-        for (;;) {
-           print_power_supply();
-           sleep(PRINT_INTERVAL);
-        }
-    } else {
-        return run_sd_bus_loop();
+
+static void *run_print_loop(void *) {
+    for (;;) {
+        print_power_supply();
+        sleep(PRINT_INTERVAL);
     }
+
+    return NULL;
+}
+
+static void *run_udev_mon_loop(void *) {
+    struct udev *udev;
+    struct udev_device *dev;
+    struct udev_monitor *mon;
+    int fd;
+
+    /* create udev object */
+    udev = udev_new();
+    if (!udev) {
+        fprintf(stderr, "Can't create udev\n");
+        return NULL;
+    }
+
+    mon = udev_monitor_new_from_netlink(udev, "udev");
+    udev_monitor_filter_add_match_subsystem_devtype(mon, "power_supply", NULL);
+    udev_monitor_enable_receiving(mon);
+    fd = udev_monitor_get_fd(mon);
+
+    for (;;) {
+        fd_set fds;
+        struct timeval tv;
+        int ret;
+
+        FD_ZERO(&fds);
+        FD_SET(fd, &fds);
+        tv.tv_sec = 0;
+        tv.tv_usec = 0;
+
+        ret = select(fd + 1, &fds, NULL, NULL, &tv);
+        if (ret > 0 && FD_ISSET(fd, &fds)) {
+            dev = udev_monitor_receive_device(mon);
+            if (dev) {
+                print_power_supply();
+                udev_device_unref(dev);
+            }
+        }
+        /* 500 milliseconds */
+        usleep(500 * 1000);
+    }
+
+    /* free udev */
+    udev_unref(udev);
+}
+
+int main(int argc, char *argv[]) {
+    pthread_t t1, t2;
+    int err;
+
+    err = pthread_create(&t1, NULL, run_print_loop, NULL);
+    if (err != 0) {
+        printf("\ncan't create thread :[%s]", strerror(err));
+        return EXIT_FAILURE;
+    }
+
+    err = pthread_create(&t2, NULL, run_udev_mon_loop, NULL);
+    if (err != 0) {
+        printf("\ncan't create thread :[%s]", strerror(err));
+        return EXIT_FAILURE;
+    }
+
+    return run_sd_bus_loop();
 }
