@@ -40,8 +40,15 @@ print_date() {
     date +$'date\t%a %d %b %H:%M'
 }
 
-# volume
+print_ime() {
+    local ime=$(ibus engine 2> /dev/null)
+
+    echo -e "ime\t$ime"
+}
+
 print_vol() {
+    # format: vol/muted?/volume
+
     vol_info=$(wpctl get-volume @DEFAULT_SINK@)
     vol=$(bc <<< "$(cut -d' ' -f2 <<< ${vol_info}) * 100" | cut -d. -f1)
     muted=$(cut -d' ' -f3 <<< $vol_info)
@@ -52,6 +59,72 @@ print_vol() {
     fi
 
     echo -e "vol\t${muted}\t${vol}"
+}
+
+print_net() {
+    # format: net/connected?/type
+
+    local ETHERNET=1
+    local WIRELESS=2
+
+    local NET_PATH="/sys/class/net"
+    local connected=0
+    local type=0
+
+
+    for net_path in $NET_PATH/*; do
+        operstate=$(cat "$net_path/operstate")
+
+        if [[ $operstate == "up" ]]; then
+            connected=1
+        fi
+
+        if [[ -d "$net_path/wireless" ]]; then
+            type=$WIRELESS
+        else
+            type=$ETHERNET
+        fi
+    done
+
+    echo -e "net\t${connected}\t${type}"
+}
+
+print_pwr() {
+    # format: pwr/ac_online?/batt_perc
+
+    local POWER_SUPPLY_PATH="/sys/class/power_supply"
+
+    local ac_path=''
+    local battery_paths=()
+    local ps_type
+    local ac_online=0
+
+    for ps_path in $POWER_SUPPLY_PATH/*; do
+        ps_type=$(cat "$ps_path/type")
+        case $ps_type in
+            'Mains')
+                ac_path=$ps_path
+                ;;
+            'Battery')
+                battery_paths+=($ps_path)
+                ;;
+        esac
+    done
+
+    if [ -f "${ac_path}/online" ]; then
+        ac_online=$(cat "${ac_path}/online")
+    fi
+
+    local battery_level=0
+    local battery_max=0
+    for battery_path in "${battery_paths[@]}"; do
+        battery_level=$(($battery_level + $(cat "${battery_path}/energy_now")))
+        battery_max=$(($battery_max + $(cat "${battery_path}/energy_full")))
+    done
+
+    local battery_perc=$((${battery_level} * 100 / ${battery_max}))
+
+    echo -e "pwr\t${ac_online}\t${battery_perc}"
 }
 
 # formatters
@@ -131,9 +204,12 @@ format_date() {
 }
 
 format_ime() {
-    local ime="$1"
+    local ime=""
 
-    echo -n "[${ime}]"
+    [[ $1 == "xkb:us::eng" ]] && ime="[en]"
+    [[ $1 == "libpinyin" ]] && ime="[zh]"
+
+    echo -n "${ime}"
 }
 
 format_vol() {
@@ -175,10 +251,10 @@ format_net() {
     echo -n "${icon}"
 }
 
-format_batt() {
+format_pwr() {
     local ac=$1
     local battery_percent=$2
-    local icon, batt
+    local icon, pwr
 
     if [[ "${ac}" -eq 1 ]]; then
         icon=""
@@ -196,13 +272,13 @@ format_batt() {
         fi
     fi
 
-    batt="${icon} ${battery_percent}%"
+    pwr="${icon} ${battery_percent}%"
 
     if [[ "${ac}" -eq 0 && "${battery_percent}" -le 9 ]]; then
-        batt="$(tput setaf 1)${batt}"
+        pwr="$(tput setaf 1)${pwr}"
     fi
 
-    echo -n "${batt}"
+    echo -n "${pwr}"
 }
 
 # hide the cursor
@@ -216,6 +292,9 @@ format_logo
     # volume
     print_vol
 
+    # ime
+    print_ime
+
     # time
     print_date
     while :; do
@@ -224,8 +303,25 @@ format_logo
     done > >(uniq_linebuffered) &
     pids[0]=$!
 
-    sysmon >(uniq_linebuffered) &
+    # power supply
+    while :; do
+        print_pwr
+        sleep 10 || break
+    done > >(uniq_linebuffered) &
     pids[1]=$!
+
+    udevadm monitor --udev --subsystem-match power_supply |
+        while read event; do
+            print_pwr
+        done > >(uniq_linebuffered) &
+    pids[2]=$!
+
+    # net
+    while :; do
+        print_net
+        sleep 1 || break
+    done > >(uniq_linebuffered) &
+    pids[3]=$!
 
     # initialize tags
     echo -n "tags init"
@@ -256,7 +352,7 @@ format_logo
                 net=$(format_net "${cmd[@]:1}")
                 ;;
             pwr)
-                pwr=$(format_batt "${cmd[@]:1}")
+                pwr=$(format_pwr "${cmd[@]:1}")
                 ;;
             ime)
                 ime=$(format_ime "${cmd[@]:1}")
