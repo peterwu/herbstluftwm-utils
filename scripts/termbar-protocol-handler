@@ -2,21 +2,21 @@
 # https://unix.stackexchange.com/questions/497146/create-a-custom-url-protocol-handler
 
 # workspace
-# tbp://herbstluftwm/ws/${tag_name}
-if [[ $1 =~ ^tbp:\/\/herbstluftwm\/tag\/[1-9]$ ]]; then
+# tbp://wm/ws/${tag_name}
+if [[ $1 =~ ^tbp:\/\/wm\/ws\/[1-9]$ ]]; then
     tag=${1##*/}
     herbstclient use "${tag}"
 fi
 
 # date time panel
-# tbp://herbstluftwm/dtp
+# tbp://wm/dtp
 # show-time
-if [[ $1 =~ ^tbp:\/\/herbstluftwm\/dtp$ ]]; then
+if [[ $1 =~ ^tbp:\/\/wm\/dtp$ ]]; then
     herbstluftwm-show-time
 fi
 
-# exit
-# tbp://herbstluftwm/bye
-if [[ $1 =~ ^tbp:\/\/herbstluftwm\/bye$ ]]; then
+# sayonara
+# tbp://wm/bye
+if [[ $1 =~ ^tbp:\/\/wm\/bye$ ]]; then
     herbstluftwm-exit
 fi
