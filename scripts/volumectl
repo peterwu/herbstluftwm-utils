@@ -24,7 +24,7 @@ busctl --user call wbd.utils.sysmon \
        Emit sii                     \
        vol "${muted}" "${vol}"
 
-if [ $muted == true ]; then
+if [ $muted == 1 ]; then
     dunstify --appname "herbstluftwm-update-volume"                      \
              --timeout 1500                                              \
              --urgency low                                               \

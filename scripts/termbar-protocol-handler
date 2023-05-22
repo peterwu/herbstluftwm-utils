@@ -18,5 +18,5 @@ fi
 # sayonara
 # tbp://wm/bye
 if [[ $1 =~ ^tbp:\/\/wm\/bye$ ]]; then
-    herbstluftwm-exit
+    sayonara
 fi

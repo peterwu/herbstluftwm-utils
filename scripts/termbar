@@ -40,6 +40,20 @@ print_date() {
     date +$'date\t%a %d %b %H:%M'
 }
 
+# volume
+print_vol() {
+    vol_info=$(wpctl get-volume @DEFAULT_SINK@)
+    vol=$(bc <<< "$(cut -d' ' -f2 <<< ${vol_info}) * 100" | cut -d. -f1)
+    muted=$(cut -d' ' -f3 <<< $vol_info)
+    if [[ $muted == "[MUTED]" ]]; then
+        muted=1
+    else
+        muted=0
+    fi
+
+    echo -e "vol\t${muted}\t${vol}"
+}
+
 # formatters
 format_logo() {
     # # OSC 8 ; params ; URI ST <name> OSC 8 ;; ST
@@ -199,8 +213,11 @@ format_logo
 
 # the fun begins
 {
+    # volume
+    print_vol
+
     # time
-    # print_date
+    print_date
     while :; do
         print_date
         sleep 1 || break
