@@ -9,17 +9,17 @@ pkg_check_modules(SD REQUIRED libsystemd)
 pkg_check_modules(UDEV REQUIRED libudev)
 pkg_check_modules(IBUS REQUIRED ibus-1.0)
 
-add_executable(sysmon main.cpp)
+add_executable(sysmon src/main.cpp)
 target_sources(sysmon PRIVATE
-        status_printer.h
+        src/status_printer.h
 
-        notification.cpp
-        systemctl.cpp
+        src/notification.cpp
+        src/systemctl.cpp
 
-        ibus_monitor.cpp
-        network_monitor.cpp
-        power_monitor.cpp
-        system_monitor.cpp)
+        src/ibus_monitor.cpp
+        src/network_monitor.cpp
+        src/power_monitor.cpp
+        src/system_monitor.cpp)
 target_include_directories(sysmon PRIVATE
         ${IBUS_INCLUDE_DIRS}
         ${SD_INCLUDE_DIRS}

@@ -1,8 +1,8 @@
 #ifndef HERBSTLUFTWM_UTILS_NETWORK_MONITOR_H
 #define HERBSTLUFTWM_UTILS_NETWORK_MONITOR_H
 
-#include "status_printer.h"
 #include "monitor.h"
+#include "status_printer.h"
 
 namespace wbd::monitor {
 
