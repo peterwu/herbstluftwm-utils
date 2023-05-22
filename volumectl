@@ -18,9 +18,11 @@ else
     muted=false
 fi
 
-# TODO: call sysmon's dbus method to emit this signal instead
-# in order to decouple from herbstluftwm as much as possible
-herbstclient emit_hook vol "${muted}" "${vol}"
+busctl --user call wbd.utils.sysmon \
+       /wbd/utils/sysmon            \
+       wbd.utils.sysmon             \
+       Emit sii                     \
+       vol "${muted}" "${vol}"
 
 if [ $muted == true ]; then
     dunstify --appname "herbstluftwm-update-volume"                      \
